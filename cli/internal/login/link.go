@@ -110,12 +110,7 @@ func (c *LinkCommand) Run(args []string) int {
 	return 0
 }
 
-var (
-	errUserCanceled       = errors.New("canceled")
-	errOverage            = errors.New("usage limit")
-	errNeedCachingEnabled = errors.New("caching not enabled")
-	errTryAfterEnable     = errors.New("link after enabling caching")
-)
+var errUserCanceled = errors.New("canceled")
 
 func (l *link) run() error {
 	dir, err := homedir.Dir()
@@ -213,8 +208,8 @@ func (l *link) run() error {
 				} else {
 					l.ui.Info(fmt.Sprintf("Visit %v in your browser to enable Remote Caching", url))
 				}
+				return errTryAfterEnable
 			}
-			return errTryAfterEnable
 		}
 		return errNeedCachingEnabled
 	case util.CachingStatusOverLimit:
@@ -252,25 +247,6 @@ func (l *link) run() error {
 func (l *link) logError(err error) {
 	l.logger.Error("error", err)
 	l.ui.Error(fmt.Sprintf("%s%s", ui.ERROR_PREFIX, color.RedString(" %v", err)))
-}
-
-func promptEnableCaching() (bool, error) {
-	shouldEnable := false
-	err := survey.AskOne(
-		&survey.Confirm{
-			Default: true,
-			Message: util.Sprintf("Remote Caching was previously disabled for this team. Would you like to enable it now?"),
-		},
-		&shouldEnable,
-		survey.WithValidator(survey.Required),
-		survey.WithIcons(func(icons *survey.IconSet) {
-			icons.Question.Format = "gray+hb"
-		}),
-	)
-	if err != nil {
-		return false, err
-	}
-	return shouldEnable, nil
 }
 
 func promptSetup(location string) (bool, error) {
