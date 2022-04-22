@@ -180,6 +180,43 @@ func (c *ApiClient) doPreflight(requestURL string, requestMethod string, request
 	return resp, requestURL, nil
 }
 
+type apiError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+func (ae *apiError) cacheDisabled() (*util.CacheDisabled, error) {
+	if strings.HasPrefix(ae.Code, "remote_caching_") {
+		statusString := ae.Code[len("remote_caching_"):]
+		status, err := util.CachingStatusFromString(statusString)
+		if err != nil {
+			return nil, err
+		}
+		return &util.CacheDisabled{
+			Status:  status,
+			Message: ae.Message,
+		}, nil
+	}
+	return nil, fmt.Errorf("unknown status %v: %v", ae.Code, ae.Message)
+}
+
+func (c *ApiClient) handle402(body io.Reader) error {
+	raw, err := ioutil.ReadAll(body)
+	if err != nil {
+		return fmt.Errorf("failed to read response %v", err)
+	}
+	apiError := &apiError{}
+	err = json.Unmarshal(raw, apiError)
+	if err != nil {
+		return fmt.Errorf("failed to read response (%v): %v", string(raw), err)
+	}
+	disabledErr, err := apiError.cacheDisabled()
+	if err != nil {
+		return err
+	}
+	return disabledErr
+}
+
 func (c *ApiClient) PutArtifact(hash string, artifactBody []byte, duration int, tag string) error {
 	if err := c.okToRequest(); err != nil {
 		return err
@@ -213,10 +250,13 @@ func (c *ApiClient) PutArtifact(hash string, artifactBody []byte, duration int, 
 		return fmt.Errorf("[WARNING] Invalid cache URL: %w", err)
 	}
 
-	if resp, err := c.HttpClient.Do(req); err != nil {
+	resp, err := c.HttpClient.Do(req)
+	if err != nil {
 		return fmt.Errorf("failed to store files in HTTP cache: %w", err)
-	} else {
-		resp.Body.Close()
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusPaymentRequired {
+		return c.handle402(resp.Body)
 	}
 	return nil
 }

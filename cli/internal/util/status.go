@@ -29,3 +29,12 @@ func CachingStatusFromString(raw string) (CachingStatus, error) {
 		return CachingStatusDisabled, fmt.Errorf("unknown caching status: %v", raw)
 	}
 }
+
+type CacheDisabled struct {
+	Status  CachingStatus
+	Message string
+}
+
+func (cd *CacheDisabled) Error() string {
+	return cd.Message
+}

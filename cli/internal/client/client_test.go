@@ -3,6 +3,7 @@ package client
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hashicorp/go-hclog"
+	"github.com/vercel/turborepo/cli/internal/util"
 )
 
 func Test_sendToServer(t *testing.T) {
@@ -90,4 +92,27 @@ func Test_PutArtifact(t *testing.T) {
 		t.Errorf("Handler read '%v', wants '%v'", testBody, expectedArtifactBody)
 	}
 
+}
+
+func Test_PutWhenCachingDisabled(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		defer req.Body.Close()
+		w.WriteHeader(402)
+		w.Write([]byte("{\"code\": \"remote_caching_disabled\",\"message\":\"caching disabled\"}"))
+	}))
+	defer ts.Close()
+
+	// Set up test expected values
+	apiClient := NewClient(ts.URL+"/hash", hclog.Default(), "v1", "", "my-team-slug", 1, false)
+	apiClient.SetToken("my-token")
+	expectedArtifactBody := []byte("My string artifact")
+	// Test Put Artifact
+	err := apiClient.PutArtifact("hash", expectedArtifactBody, 500, "")
+	cd := &CacheDisabled{}
+	if !errors.As(err, &cd) {
+		t.Errorf("expected cache disabled error, got %v", err)
+	}
+	if cd.Status != util.CachingStatusDisabled {
+		t.Errorf("caching status: expected %v, got %v", util.CachingStatusDisabled, cd.Status)
+	}
 }
