@@ -97,7 +97,7 @@ func Test_PutArtifact(t *testing.T) {
 func Test_PutWhenCachingDisabled(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		defer req.Body.Close()
-		w.WriteHeader(402)
+		w.WriteHeader(403)
 		w.Write([]byte("{\"code\": \"remote_caching_disabled\",\"message\":\"caching disabled\"}"))
 	}))
 	defer ts.Close()
@@ -114,5 +114,30 @@ func Test_PutWhenCachingDisabled(t *testing.T) {
 	}
 	if cd.Status != util.CachingStatusDisabled {
 		t.Errorf("caching status: expected %v, got %v", util.CachingStatusDisabled, cd.Status)
+	}
+}
+
+func Test_FetchWhenCachingDisabled(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		defer req.Body.Close()
+		w.WriteHeader(403)
+		w.Write([]byte("{\"code\": \"remote_caching_disabled\",\"message\":\"caching disabled\"}"))
+	}))
+	defer ts.Close()
+
+	// Set up test expected values
+	apiClient := NewClient(ts.URL+"/hash", hclog.Default(), "v1", "", "my-team-slug", 1, false)
+	apiClient.SetToken("my-token")
+	// Test Put Artifact
+	resp, err := apiClient.FetchArtifact("hash")
+	cd := &util.CacheDisabled{}
+	if !errors.As(err, &cd) {
+		t.Errorf("expected cache disabled error, got %v", err)
+	}
+	if cd.Status != util.CachingStatusDisabled {
+		t.Errorf("caching status: expected %v, got %v", util.CachingStatusDisabled, cd.Status)
+	}
+	if resp != nil {
+		t.Errorf("response got %v, want <nil>", resp)
 	}
 }

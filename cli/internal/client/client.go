@@ -201,7 +201,7 @@ func (ae *apiError) cacheDisabled() (*util.CacheDisabled, error) {
 	return nil, fmt.Errorf("unknown status %v: %v", ae.Code, ae.Message)
 }
 
-func (c *ApiClient) handle402(body io.Reader) error {
+func (c *ApiClient) handle403(body io.Reader) error {
 	raw, err := ioutil.ReadAll(body)
 	if err != nil {
 		return fmt.Errorf("failed to read response %v", err)
@@ -261,8 +261,8 @@ func (c *ApiClient) PutArtifact(hash string, artifactBody []byte, duration int, 
 		return fmt.Errorf("failed to store files in HTTP cache: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode == http.StatusPaymentRequired {
-		return c.handle402(resp.Body)
+	if resp.StatusCode == http.StatusForbidden {
+		return c.handle403(resp.Body)
 	}
 	return nil
 }
@@ -302,7 +302,15 @@ func (c *ApiClient) FetchArtifact(hash string) (*http.Response, error) {
 		return nil, fmt.Errorf("invalid cache URL: %w", err)
 	}
 
-	return c.HttpClient.Do(req)
+	resp, err := c.HttpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch artifact: %v", err)
+	} else if resp.StatusCode == http.StatusForbidden {
+		err = c.handle403(resp.Body)
+		_ = resp.Body.Close()
+		return nil, err
+	}
+	return resp, nil
 }
 
 func (c *ApiClient) RecordAnalyticsEvents(events []map[string]interface{}) error {
