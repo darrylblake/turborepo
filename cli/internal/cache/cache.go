@@ -39,17 +39,21 @@ type CacheEvent struct {
 	Duration int    `mapstructure:"duration"`
 }
 
+type OnCacheRemoved = func(cache Cache, err error)
+
 // New creates a new cache
-func New(config *config.Config, remoteOnly bool, recorder analytics.Recorder) Cache {
-	c := newSyncCache(config, remoteOnly, recorder)
+func New(config *config.Config, remoteOnly bool, recorder analytics.Recorder, onCacheRemoved OnCacheRemoved) Cache {
+	c := newSyncCache(config, remoteOnly, recorder, onCacheRemoved)
 	if config.Cache.Workers > 0 {
 		return newAsyncCache(c, config)
 	}
 	return c
 }
 
-func newSyncCache(config *config.Config, remoteOnly bool, recorder analytics.Recorder) Cache {
-	mplex := &cacheMultiplexer{}
+func newSyncCache(config *config.Config, remoteOnly bool, recorder analytics.Recorder, onCacheRemoved OnCacheRemoved) Cache {
+	mplex := &cacheMultiplexer{
+		onCacheRemoved: onCacheRemoved,
+	}
 	if config.Cache.Dir != "" && !remoteOnly {
 		mplex.caches = append(mplex.caches, newFsCache(config, recorder))
 	}
@@ -68,8 +72,9 @@ func newSyncCache(config *config.Config, remoteOnly bool, recorder analytics.Rec
 // A cacheMultiplexer multiplexes several caches into one.
 // Used when we have several active (eg. http, dir).
 type cacheMultiplexer struct {
-	caches []Cache
-	mu     sync.RWMutex
+	caches         []Cache
+	mu             sync.RWMutex
+	onCacheRemoved OnCacheRemoved
 }
 
 func (mplex *cacheMultiplexer) Put(target string, key string, duration int, files []string) error {
@@ -118,17 +123,10 @@ func (mplex *cacheMultiplexer) storeUntil(target string, key string, duration in
 		return err
 	}
 
-	var cd *util.CacheDisabled
 	for _, removal := range toRemove {
 		if removal != nil {
-			err := mplex.removeCache(removal)
-			if err != nil && cd == nil {
-				cd = err
-			}
+			mplex.removeCache(removal)
 		}
-	}
-	if cd != nil {
-		return cd
 	}
 	return nil
 }
@@ -136,27 +134,47 @@ func (mplex *cacheMultiplexer) storeUntil(target string, key string, duration in
 // removeCache takes a requested removal and tries to actually remove it. However,
 // multiple requests could result in concurrent requests to remove the same cache.
 // Let one of them win and propagate the error, the rest will no-op.
-func (mplex *cacheMultiplexer) removeCache(removal *cacheRemoval) *util.CacheDisabled {
+func (mplex *cacheMultiplexer) removeCache(removal *cacheRemoval) {
 	mplex.mu.Lock()
 	defer mplex.mu.Unlock()
 	for i, cache := range mplex.caches {
 		if cache == removal.cache {
 			mplex.caches = append(mplex.caches[:i], mplex.caches[i+1:]...)
-			return removal.err
+			mplex.onCacheRemoved(cache, removal.err)
+			break
 		}
 	}
-	return nil
 }
 
 func (mplex *cacheMultiplexer) Fetch(target string, key string, files []string) (bool, []string, int, error) {
+	// Make a shallow copy of the caches, since storeUntil can call removeCache
+	mplex.mu.RLock()
+	caches := make([]Cache, len(mplex.caches))
+	copy(caches, mplex.caches)
+	mplex.mu.RUnlock()
+
 	// Retrieve from caches sequentially; if we did them simultaneously we could
 	// easily write the same file from two goroutines at once.
-	for i, cache := range mplex.caches {
-		if ok, actualFiles, duration, err := cache.Fetch(target, key, files); ok {
+	for i, cache := range caches {
+		ok, actualFiles, duration, err := cache.Fetch(target, key, files)
+		if err != nil {
+			cd := &util.CacheDisabled{}
+			if errors.As(err, &cd) {
+				mplex.removeCache(&cacheRemoval{
+					cache: cache,
+					err:   cd,
+				})
+			}
+			// We're ignoring the error in this situation, since with this cache
+			// abstraction, we want to check lower priority caches rather than fail
+			// the operation. Future work that plumbs UI / Logging into the cache system
+			// should probably log this at least.
+		}
+		if ok {
 			// Store this into other caches. We can ignore errors here because we know
 			// we have previously successfully stored in a higher-priority cache, and so the overall
 			// result is a success at fetching. Storing in lower-priority caches is an optimization.
-			mplex.storeUntil(target, key, duration, actualFiles, i)
+			_ = mplex.storeUntil(target, key, duration, actualFiles, i)
 			return ok, actualFiles, duration, err
 		}
 	}

@@ -108,7 +108,7 @@ func Test_PutWhenCachingDisabled(t *testing.T) {
 	expectedArtifactBody := []byte("My string artifact")
 	// Test Put Artifact
 	err := apiClient.PutArtifact("hash", expectedArtifactBody, 500, "")
-	cd := &CacheDisabled{}
+	cd := &util.CacheDisabled{}
 	if !errors.As(err, &cd) {
 		t.Errorf("expected cache disabled error, got %v", err)
 	}
