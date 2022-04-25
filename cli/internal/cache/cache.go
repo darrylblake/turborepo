@@ -165,7 +165,7 @@ func (mplex *cacheMultiplexer) Fetch(target string, key string, files []string) 
 					err:   cd,
 				})
 			}
-			// We're ignoring the error in this situation, since with this cache
+			// We're ignoring the error in the else case, since with this cache
 			// abstraction, we want to check lower priority caches rather than fail
 			// the operation. Future work that plumbs UI / Logging into the cache system
 			// should probably log this at least.
